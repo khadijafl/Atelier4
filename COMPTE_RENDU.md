@@ -93,4 +93,4 @@ async function appelerApi(livraison, cle) {
    N'importe quel client (curl, script, autre programme) peut envoyer une requête sans passer par la page. L'API doit donc valider elle-même toutes les données reçues.
 
 ## 6. Lien de la pull request
-À COMPLÉTER (lien de la pull request GitHub, une fois créée)
+https://github.com/khadijafl/Atelier4/pull/1
