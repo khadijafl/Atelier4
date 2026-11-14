@@ -1,96 +1,152 @@
-# Compte rendu : tester, sécuriser et appeler l'API LogiAI
+# Compte rendu : conteneuriser et déployer LogiAI avec Docker
 
 **Nom :** Flija **Groupe :** 4
 
-## 1. Casser son API (activité 1)
-| Cas | Requête (corps ou URL) | Prévu | Obtenu |
-|---|---|---|---|
-| champ manquant | livraison valide sans poids_kg | 422 | 422 |
-| valeur absurde | pluie_mm: 500 (ou poids_kg: 99999 dans le test) | 422 | 422 |
-| texte au lieu d'un nombre | distance_km: "beaucoup" | 422 | 422 |
-| champ en trop | ajout de "couleur": "rouge" | 422 | 422 |
-| mauvaise route | POST /v1/predictt | 404 | 404 |
+## 1. Premier constat : ça ne marche que chez moi
+| Ce que le projet suppose | 
+|---|---|
+| Une version de Python et des bibliothèques compatibles avec `model.joblib` 
+| Le fichier `.env` avec les deux clés |
+| Un modèle entraîné dans `models/` | 
+| Deux terminaux : uvicorn, puis `python -m http.server 5500` pour la page |
 
-- Une requête acceptée alors qu'elle devait être refusée ? Laquelle ?
-  Non, les 5 requêtes ont été refusées comme prévu. Les requêtes acceptées à tort se trouvaient aux bornes (activité 2).
 
-## 2. Les 2 bugs (activité 2)
-| Bug | Test qui l'a révélé | Comportement avant | Correction |
-|---|---|---|---|
-| 1 | heure_depart=24 | attendu 422, obtenu 200 : l'heure 24 n'existe pas (0 à 23) mais l'API l'acceptait | `le=24` remplacé par `le=23` |
-| 2 | nb_arrets=-1 | attendu 422, obtenu 200 : un nombre d'arrêts négatif était accepté | ajout de `ge=0` |
 
-- Sortie de `python -m pytest` à la fin de l'activité 2 :
-  41 passed, 1 warning
-
-## 3. La clé API (sprint 1)
-- Ma fonction `verify_api_key()` :
-
-```python
-def verify_api_key(x_api_key: str | None = Header(default=None)) -> str:
-    if x_api_key is None:
-        raise HTTPException(
-            status_code=401,
-            detail="Clé API manquante",
-            headers={"WWW-Authenticate": "ApiKey"},
-        )
-    if _egal(x_api_key, config.ADMIN_KEY):
-        return "admin"
-    if _egal(x_api_key, config.API_KEY):
-        return "user"
-    raise HTTPException(
-        status_code=401,
-        detail="Clé API invalide",
-        headers={"WWW-Authenticate": "ApiKey"},
-    )
+## 2. Mes fichiers Docker
+**Dockerfile (API)**
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY logiai/ ./logiai/
+COPY data/ ./data/
+COPY models/ ./models/
+ENV LOGIAI_HOME=/app
+EXPOSE 8000
+CMD ["uvicorn", "logiai.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-| Requête | Code obtenu |
-|---|---|
-| `/v1/predict` sans clé | 401 |
-| `/v1/predict` fausse clé | 401 |
-| `/v1/predict` clé utilisateur | 200 |
-| `/v1/model-info` clé utilisateur | 403 |
-| `/v1/model-info` clé administrateur | 200 |
-| `/health` sans clé | 200 |
+**web/Dockerfile (page)**
+```dockerfile
+FROM nginx:alpine
+COPY web/index.html /usr/share/nginx/html/index.html
+COPY nginx/default.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
+```
 
-- Preuve que `.env` n'est pas dans Git (sortie de `git status`) :
-  À COMPLÉTER : colle ici la sortie de `git status` (le fichier `.env` n'y apparaît pas).
+**nginx/default.conf**
+```nginx
+server {
+    listen 80;
+    server_name localhost;
 
-## 4. Le client web (sprint 2)
-- Mon `fetch` :
+    root /usr/share/nginx/html;
+    index index.html;
 
-```javascript
-async function appelerApi(livraison, cle) {
-  const reponse = await fetch(API_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-API-Key": cle },
-    body: JSON.stringify(livraison),
-  });
-  const corps = await reponse.json();
-  return { status: reponse.status, corps };
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://api:8000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
 }
 ```
 
-- Ce qui s'affiche :
-  - livraison normale : « Probabilité de retard : 73.2 %. Alerte : livraison à risque. »
-  - pluie de 500 mm : « pluie_mm : Input should be less than or equal to 100 »
-  - fausse clé : À COMPLÉTER (recopie le texte affiché par la page)
-- Avant l'ajout du CORS, la page affichait : « API injoignable ou bloquée (serveur arrêté ? CORS ?) : Failed to fetch ».
-- Expérience CORS (page servie sur le port 5501) : la page affiche « API injoignable ou bloquée (serveur arrêté ? CORS ?) : Failed to fetch ». Le navigateur bloque la réponse parce que http://localhost:5501 n'est pas dans `config.ALLOWED_ORIGINS`. `curl` marche quand même parce que CORS est une règle du navigateur : `curl` n'est pas un navigateur, seule la clé compte.
-- Où voyez-vous la clé dans F12 ? À COMPLÉTER (Network, requête `predict`, en-têtes de la requête : `X-API-Key`). Si la clé était écrite dans le JavaScript de la page, n'importe quel visiteur pourrait la lire dans le code source.
+**docker-compose.yml**
+```yaml
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: logiai-api
+    ports:
+      - '8001:8000'
+    env_file:
+      - .env
+    environment:
+      LOGIAI_HOME: /app
+    volumes:
+      - ./models:/app/models
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
-## 5. Questions de compréhension
-1. Quelle différence entre 401, 403 et 422 ?
-   401 : l'API ne sait pas qui appelle (clé absente ou fausse). 403 : elle sait qui appelle, mais l'action n'est pas permise (clé utilisateur sur /v1/model-info). 422 : l'appelant est reconnu, mais les données envoyées sont invalides. La clé est vérifiée avant les données, donc une pluie de 500 mm sans clé donne 401, pas 422.
-2. Pourquoi la clé n'est-elle ni dans le code ni dans Git ?
-   Une clé commitée reste dans l'historique de Git pour toujours, même si on supprime le fichier ensuite, et elle est lisible par tous ceux qui ont accès au dépôt. Elle est dans `.env`, ignoré par Git ; `.env.example` ne contient que de fausses valeurs.
-3. Pourquoi comparer avec `compare_digest` plutôt qu'avec `==` ?
-   `==` s'arrête au premier caractère différent, donc la durée de la réponse révèle combien de caractères sont justes (attaque par temps de réponse). `compare_digest` prend un temps constant.
-4. Pourquoi `curl` fonctionne-t-il alors que la page du port 5501 est bloquée ?
-   Le blocage vient du navigateur, qui applique CORS pour protéger l'utilisateur. `curl` n'est pas un navigateur et n'applique pas CORS : seule la clé API compte.
-5. Pourquoi la validation faite par le navigateur ne remplace-t-elle pas celle de l'API ?
-   N'importe quel client (curl, script, autre programme) peut envoyer une requête sans passer par la page. L'API doit donc valider elle-même toutes les données reçues.
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    container_name: logiai-web
+    ports:
+      - '8080:80'
+    depends_on:
+      api:
+        condition: service_healthy
+```
 
-## 6. Lien de la pull request
-https://github.com/khadijafl/Atelier4/pull/1
+## 3. Trois expériences pour casser le conteneur (activité 1)
+| Cas | Commande | Prévu | Obtenu | Explication |
+|---|---|---|---|---|
+| Sans `--env-file` | `docker run -d --name logiai-api-test -p 8001:8000 logiai:1.0` | L'API démarre, mais elle ne connaît aucune clé : 401 même avec la bonne clé. | `/health` : `auth_configured: false` ; `/v1/predict` avec la bonne clé : 401 « Clé API invalide ». | `.env` est exclu de l'image par `.dockerignore` et le conteneur ne voit pas mon dossier Windows : sans `--env-file`, l'API ne connaît aucune clé. |
+| Sans publier le port | `docker run -d --name logiai-api-test --env-file .env logiai:1.0` | `curl` échoue : le port n'est pas accessible depuis Windows. | `docker ps` : `8000/tcp` sans `->` ; `curl` : « Failed to connect to localhost:8001 » ; `docker exec` : `/health` répond `ok`. | `EXPOSE` ne fait que documenter le port : sans `-p 8001:8000`, Windows n'a aucun chemin vers le port du conteneur, alors que l'API tourne bien à l'intérieur. |
+| Écoute sur 127.0.0.1 | `docker run -d --name logiai-api-test -p 8001:8000 --env-file .env logiai:test` | Ça devrait marcher, puisque le port est publié. | Port publié (`0.0.0.0:8001->8000/tcp`) ; logs : `Uvicorn running on http://127.0.0.1:8000` ; `curl` : « Empty reply from server » ; `docker exec` : `/health` répond `ok`. | Le port est publié, mais uvicorn n'écoute que sur la boucle locale du conteneur : seul l'intérieur peut lui parler. Il faut `--host 0.0.0.0`. |
+
+## 4. Les quatre codes via Nginx (étape 5)
+| Requête (port 8080) | Code obtenu |
+|---|---|
+| `/api/health` | 200 |
+| `/api/v1/predict` sans clé | 401 (« Clé API manquante ») |
+| `/api/v1/predict` fausse clé | 401 (« Clé API invalide ») |
+| `/api/v1/predict` bonne clé `<masquée>` | 200 (probabilité 0.732, alerte true) |
+
+## 5. F12, onglet Network (étape 6)
+- Adresse de la requête : `http://localhost:8080/api/v1/predict`, en POST, réponse 200 en 409 ms.
+- Requête OPTIONS : non, une seule requête `fetch`.
+- Explication : Nginx sert la page et relaie `/api/` vers l'API, donc page et API ont la même origine. Il n'y a pas de CORS ni de requête préliminaire. À l'Atelier 4, la page (port 5500) et l'API (port 8000) avaient deux origines, d'où l'OPTIONS.
+- La clé `X-API-Key` reste visible dans les en-têtes : le reverse proxy relaie, il ne protège pas.
+
+## 6. Observer (étape 7)
+- Logs de l'API : un `GET /health` depuis `127.0.0.1` toutes les 30 s (le healthcheck). Pour une prédiction passée par Nginx :
+  `logiai-api  | INFO:     172.21.0.3:57460 - "POST /v1/predict HTTP/1.1" 200 OK`
+  
+
+| Conteneur | CPU | Mémoire | Réseau (reçu / envoyé) | PIDS |
+|---|---|---|---|---|
+| logiai-api | 0.17 % | 124.2 MiB | 18.7 kB / 8.39 kB | 12 |
+| logiai-web | 0.00 % | 4.918 MiB | 33.1 kB / 42.1 kB | 5 |
+
+
+
+## 7. Arrêt de l'API (étape 8)
+- `docker compose stop api` : seul `logiai-web` reste `Up`.
+- `curl /api/health` : **502 Bad Gateway** renvoyé par Nginx.
+- La page affiche : **API injoignable ou bloquée (serveur arrêté ? CORS ?) : Unexpected token '<', "<html> <h"... is not valid JSON** 
+- Explication : Nginx tourne toujours mais ne peut plus joindre `api:8000`, il répond 502 lui-même. Après `docker compose start api`, l'API passe par `(health: starting)` puis `healthy`, et tout remarche sans reconstruire.
+
+## 8. Le volume (étape 9)
+- `docker compose exec api ls /app/models` : `model.joblib model_info.json`, les fichiers de mon disque.
+- Preuve : un fichier `preuve.txt` créé dans `models/` côté Windows est apparu dans le conteneur, puis a disparu quand je l'ai supprimé, sans rien reconstruire.
+- Nouveau `model.joblib` : le bind mount `./models:/app/models` relie mon dossier Windows au conteneur à l'exécution, donc le conteneur lit directement mon disque et voit le nouveau fichier sans reconstruire l'image.
+- Changement dans `logiai/` : je ne monte pas `./logiai`, le code a été copié dans l'image par `COPY` au build, donc il est figé. Il faut `docker compose up -d --build` pour qu'il soit pris en compte.
+
+## 9. Questions de compréhension
+1. **Quelle différence entre une image et un conteneur ?**
+   Une image est un modèle figé en lecture seule (Python, bibliothèques, code, données, modèle). Un conteneur est une instance en exécution de cette image, avec une fine couche inscriptible éphémère. Avec une image, on peut lancer plusieurs conteneurs, et supprimer un conteneur ne supprime pas l'image.
+2. **Pourquoi le navigateur appelle-t-il `/api/v1/predict` et non `api:8000` ?**
+   Le nom `api` n'existe que dans le réseau Docker, pas sur Windows : mon navigateur ne saurait pas le résoudre. Un chemin relatif part vers le même hôte et le même port que la page (8080), et c'est Nginx qui relaie vers `api:8000`. Cela évite aussi le CORS.
+3. **Pourquoi `depends_on` seul ne suffit-il pas, et que change `service_healthy` ?**
+   `depends_on` garantit seulement l'ordre de démarrage : le conteneur `api` démarre avant `web`, mais l'API n'est pas forcément prête (chargement du modèle). Avec `condition: service_healthy`, Compose attend que le healthcheck de l'API réussisse avant de démarrer la page.
+4. **Pourquoi uvicorn doit-il écouter sur `0.0.0.0` ?**
+   Avec `127.0.0.1`, seul l'intérieur du conteneur peut joindre l'API : le port publié ne sert à rien (expérience 3, « Empty reply from server »). Avec `0.0.0.0`, elle accepte les connexions venues de l'extérieur du conteneur, donc de Windows et de Nginx.
+5. **Pourquoi `/health` reste-t-il public et `.env` hors de l'image ?**
+   `/health` doit rester public, sinon le healthcheck recevrait un 401 et l'API ne serait jamais `healthy`. `.env` contient les clés : une clé copiée dans l'image resterait lisible par quiconque récupère l'image. Il est exclu par `.dockerignore` et passé à l'exécution par `env_file`.
+## 10. Lien de la pull request
