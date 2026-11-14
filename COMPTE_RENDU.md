@@ -150,3 +150,4 @@ services:
 5. **Pourquoi `/health` reste-t-il public et `.env` hors de l'image ?**
    `/health` doit rester public, sinon le healthcheck recevrait un 401 et l'API ne serait jamais `healthy`. `.env` contient les clés : une clé copiée dans l'image resterait lisible par quiconque récupère l'image. Il est exclu par `.dockerignore` et passé à l'exécution par `env_file`.
 ## 10. Lien de la pull request
+https://github.com/khadijafl/Atelier5/pull/1
