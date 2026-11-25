@@ -138,16 +138,17 @@ services:
 - Nouveau `model.joblib` : le bind mount `./models:/app/models` relie mon dossier Windows au conteneur à l'exécution, donc le conteneur lit directement mon disque et voit le nouveau fichier sans reconstruire l'image.
 - Changement dans `logiai/` : je ne monte pas `./logiai`, le code a été copié dans l'image par `COPY` au build, donc il est figé. Il faut `docker compose up -d --build` pour qu'il soit pris en compte.
 
-## 9. Questions de compréhension
-1. **Quelle différence entre une image et un conteneur ?**
-   Une image est un modèle figé en lecture seule (Python, bibliothèques, code, données, modèle). Un conteneur est une instance en exécution de cette image, avec une fine couche inscriptible éphémère. Avec une image, on peut lancer plusieurs conteneurs, et supprimer un conteneur ne supprime pas l'image.
-2. **Pourquoi le navigateur appelle-t-il `/api/v1/predict` et non `api:8000` ?**
-   Le nom `api` n'existe que dans le réseau Docker, pas sur Windows : mon navigateur ne saurait pas le résoudre. Un chemin relatif part vers le même hôte et le même port que la page (8080), et c'est Nginx qui relaie vers `api:8000`. Cela évite aussi le CORS.
-3. **Pourquoi `depends_on` seul ne suffit-il pas, et que change `service_healthy` ?**
-   `depends_on` garantit seulement l'ordre de démarrage : le conteneur `api` démarre avant `web`, mais l'API n'est pas forcément prête (chargement du modèle). Avec `condition: service_healthy`, Compose attend que le healthcheck de l'API réussisse avant de démarrer la page.
-4. **Pourquoi uvicorn doit-il écouter sur `0.0.0.0` ?**
-   Avec `127.0.0.1`, seul l'intérieur du conteneur peut joindre l'API : le port publié ne sert à rien (expérience 3, « Empty reply from server »). Avec `0.0.0.0`, elle accepte les connexions venues de l'extérieur du conteneur, donc de Windows et de Nginx.
-5. **Pourquoi `/health` reste-t-il public et `.env` hors de l'image ?**
-   `/health` doit rester public, sinon le healthcheck recevrait un 401 et l'API ne serait jamais `healthy`. `.env` contient les clés : une clé copiée dans l'image resterait lisible par quiconque récupère l'image. Il est exclu par `.dockerignore` et passé à l'exécution par `env_file`.
-## 10. Lien de la pull request
-https://github.com/khadijafl/Atelier5/pull/1
+## 5. Questions de compréhension
+1. Quelle différence entre 401, 403 et 422 ?
+   401 : l'API ne sait pas qui appelle (clé absente ou fausse). 403 : elle sait qui appelle, mais l'action n'est pas permise (clé utilisateur sur /v1/model-info). 422 : l'appelant est reconnu, mais les données envoyées sont invalides. La clé est vérifiée avant les données, donc une pluie de 500 mm sans clé donne 401, pas 422.
+2. Pourquoi la clé n'est-elle ni dans le code ni dans Git ?
+   Une clé commitée reste dans l'historique de Git pour toujours, même si on supprime le fichier ensuite, et elle est lisible par tous ceux qui ont accès au dépôt. Elle est dans `.env`, ignoré par Git ; `.env.example` ne contient que de fausses valeurs.
+3. Pourquoi comparer avec `compare_digest` plutôt qu'avec `==` ?
+   `==` s'arrête au premier caractère différent, donc la durée de la réponse révèle combien de caractères sont justes (attaque par temps de réponse). `compare_digest` prend un temps constant.
+4. Pourquoi `curl` fonctionne-t-il alors que la page du port 5501 est bloquée ?
+   Le blocage vient du navigateur, qui applique CORS pour protéger l'utilisateur. `curl` n'est pas un navigateur et n'applique pas CORS : seule la clé API compte.
+5. Pourquoi la validation faite par le navigateur ne remplace-t-elle pas celle de l'API ?
+   N'importe quel client (curl, script, autre programme) peut envoyer une requête sans passer par la page. L'API doit donc valider elle-même toutes les données reçues.
+
+## 6. Lien de la pull request
+À COMPLÉTER (lien de la pull request GitHub, une fois créée)
